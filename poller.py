@@ -252,12 +252,6 @@ def is_available_generic(page_text, cfg):
 
 def main():
     cfg = load_config()
-    send_telegram(
-        cfg["telegram_bot_token"],
-        cfg["telegram_chat_id"],
-        "✅ Telegram test successful! Movie Alert is connected."
-    )
-    return 0
     state = load_json(STATE_PATH, default={"available": False}) or {"available": False}
 
     target_desc = cfg.get("theatre") or cfg.get("requested_date", "target")
