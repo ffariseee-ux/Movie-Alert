@@ -1,4 +1,7 @@
 {
   "available": false,
-  "checked_at": 1794775477
+  "checked_at": 1794775477,
+  "check_hour": 498556,
+  "checks_this_hour": 1,
+  "last_status_hour": 498556
 }
