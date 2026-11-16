@@ -1,6 +1,6 @@
 name: booking-watch
 
-# on:
+on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}   # lets you trigger a manual run from the Actions tab
