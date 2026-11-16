@@ -4,6 +4,6 @@
   "requested_date": "20261218",
   "venue_code": "PRHN",
   "venue_label": "Prasads Multiplex, Hyderabad",
-  "url_template": "https://in.bookmyshow.com/movies/hyderabad/dune-part-three/ET00491771",
+  "url_template":"https://in.bookmyshow.com/movies/hyderabad/dune-part-three/buytickets/ET00491771/{date}",
   "min_references": 10
 }
