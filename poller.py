@@ -265,26 +265,6 @@ def main():
         return 0
 
     available = is_available(page, cfg)
-    now = int(time.time())
-    hour = now // 3600
-
-    if state.get("check_hour") != hour:
-        state["check_hour"] = hour
-        state["checks_this_hour"] = 0
-
-    state["checks_this_hour"] = state.get("checks_this_hour", 0) + 1
-
-    if not available:
-        if not state.get("last_status_hour") == hour:
-            send_telegram(
-                cfg["telegram_bot_token"],
-                cfg["telegram_chat_id"],
-                "⏳ Bookings not opened yet.\n"
-                f"Successful checks this hour: {state['checks_this_hour']}"
-            )
-            state["last_status_hour"] = hour
-
-    save_json(STATE_PATH, state)
     print(f"[{label}] available={available} (was {state.get('available')})")
 
     if available and not state.get("available"):
