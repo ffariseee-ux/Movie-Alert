@@ -155,7 +155,7 @@ def fetch(cfg):
         cfg["target_url"],
         timeout=30,
         proxies=proxies,
-        headers={"Referer": "https://in.bookmyshow.com/explore/movies-chennai"},
+        headers={"Referer": "https://in.bookmyshow.com/explore/movies-hyderabad"},
     )
     resp.raise_for_status()
     return resp.text
