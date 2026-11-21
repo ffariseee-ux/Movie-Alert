@@ -2,16 +2,18 @@
 """
 Ticket-booking watcher.
 
-Polls a URL (a BookMyShow / District showtimes page, or an internal API
-request you grabbed from your browser's DevTools) and sends a Telegram
-message the moment a given theatre appears with booking open.
+Polls BookMyShow / District pages (or an internal API request you grabbed from
+DevTools) and sends a Telegram message when:
 
-State is tracked in state.json so you get alerted on the *transition*
-to "available" instead of on every run.
+  1. shows are NEWLY ADDED at the theatre for a movie/date (booking opens)
+  2. more shows are added to a date that's already open     (optional: session_regex)
+
+Multi-movie / multi-date: list movies under "movies" and set date_from/date_to
+in config.json. Each (movie, date) is tracked separately in state.json.
+A plain single-movie config (target_url / url_template + requested_date) still works.
 
 Everything is driven by config.json (and/or environment variables), so
-nothing site-specific is hardcoded -- if BookMyShow/District change their
-markup you only edit config, not code.
+nothing site-specific is hardcoded.
 """
 
 import json
@@ -21,6 +23,7 @@ import sys
 import time
 import urllib.parse
 from collections import Counter
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -63,6 +66,21 @@ def save_json(path, data):
         json.dump(data, fh, indent=2)
 
 
+def expand_dates(cfg):
+    """dates list, or date_from..date_to (YYYYMMDD, inclusive), or requested_date."""
+    if cfg.get("dates"):
+        return [str(d) for d in cfg["dates"]]
+    if cfg.get("date_from") and cfg.get("date_to"):
+        d = datetime.strptime(str(cfg["date_from"]), "%Y%m%d")
+        end = datetime.strptime(str(cfg["date_to"]), "%Y%m%d")
+        out = []
+        while d <= end:
+            out.append(d.strftime("%Y%m%d"))
+            d += timedelta(days=1)
+        return out
+    return [str(cfg["requested_date"])] if cfg.get("requested_date") else []
+
+
 def load_config():
     cfg = load_json(CONFIG_PATH, default={}) or {}
 
@@ -82,24 +100,66 @@ def load_config():
     if os.environ.get("HEADERS_JSON"):
         cfg["headers"] = json.loads(os.environ["HEADERS_JSON"])
 
-    # The BMS date is embedded in the URL, so build the URL from the template
-    # and the (possibly overridden) requested_date. Set REQUESTED_DATE=20260717
-    # to point everything at the 17th for a live end-to-end test.
-    if cfg.get("url_template") and cfg.get("requested_date"):
-        cfg["target_url"] = cfg["url_template"].format(date=cfg["requested_date"])
+    # REQUESTED_DATE=20261217 points everything at that single date (live test).
+    if os.environ.get("REQUESTED_DATE"):
+        cfg["dates"] = [os.environ["REQUESTED_DATE"]]
+        cfg.pop("date_from", None)
+        cfg.pop("date_to", None)
 
-    required = ["target_url", "telegram_bot_token", "telegram_chat_id"]
-    detector = cfg.get("detector")
+    for k in ("telegram_bot_token", "telegram_chat_id"):
+        if not cfg.get(k):
+            sys.exit(f"Missing required config: {k}")
+    return cfg
+
+
+def validate_target(t):
+    required = ["target_url"]
+    detector = t.get("detector")
     if detector in ("bms_date", "venue_date"):
         required.append("requested_date")
-    elif detector != "venue_date":
+    else:
         required.append("theatre")
-    if detector == "venue_date" and not (cfg.get("venue_code") or cfg.get("venue_codes")):
+    if detector == "venue_date" and not (t.get("venue_code") or t.get("venue_codes")):
         sys.exit("venue_date detector needs 'venue_code' or 'venue_codes'")
-    missing = [k for k in required if not cfg.get(k)]
+    missing = [k for k in required if not t.get(k)]
     if missing:
-        sys.exit(f"Missing required config: {', '.join(missing)}")
-    return cfg
+        sys.exit(f"[{t.get('key')}] missing required config: {', '.join(missing)}")
+
+
+def build_targets(cfg):
+    """Turn config into a list of (movie, date) targets, each a flat config dict."""
+    movies = cfg.get("movies")
+    dates = expand_dates(cfg)
+    targets = []
+
+    if movies:
+        if not dates:
+            sys.exit("Multi-movie config needs dates, or date_from + date_to")
+        for m in movies:
+            for d in dates:
+                t = {k: v for k, v in cfg.items() if k not in ("movies", "dates")}
+                t.update({k: v for k, v in m.items() if k != "name"})
+                t["movie"] = m["name"]
+                t["requested_date"] = d
+                tpl = t.get("url_template")
+                if not tpl:
+                    sys.exit(f"Movie '{m['name']}' needs a url_template containing {{date}}")
+                t["target_url"] = tpl.format(date=d)
+                t["key"] = f"{m['name']}|{d}"
+                targets.append(t)
+    else:
+        t = dict(cfg)
+        d = dates[0] if dates else None
+        if d:
+            t["requested_date"] = d
+        if t.get("url_template") and t.get("requested_date"):
+            t["target_url"] = t["url_template"].format(date=t["requested_date"])
+        t["key"] = f"{t.get('movie', 'movie')}|{t.get('requested_date') or t.get('theatre')}"
+        targets.append(t)
+
+    for t in targets:
+        validate_target(t)
+    return targets
 
 
 def send_telegram(token, chat_id, text):
@@ -112,9 +172,13 @@ def send_telegram(token, chat_id, text):
     resp.raise_for_status()
 
 
-def fetch(cfg):
+def notify(t, text):
+    send_telegram(t["telegram_bot_token"], t["telegram_chat_id"], text)
+
+
+def fetch_url(url, cfg):
     """
-    Fetch the target URL from an India egress when configured.
+    Fetch a URL from an India egress when configured.
 
     BookMyShow blocks non-India / datacenter IPs (e.g. GitHub's US runners),
     so a plain request from CI gets a 403. Two ways to route through India:
@@ -133,7 +197,7 @@ def fetch(cfg):
     scraper_key = os.environ.get("SCRAPERAPI_KEY")
     if scraper_key:
         api_url = "https://api.scraperapi.com/?" + urllib.parse.urlencode(
-            {"api_key": scraper_key, "country_code": "in", "url": cfg["target_url"]}
+            {"api_key": scraper_key, "country_code": "in", "url": url}
         )
         resp = requests.get(api_url, timeout=90)
         resp.raise_for_status()
@@ -152,7 +216,7 @@ def fetch(cfg):
         pass
 
     resp = session.get(
-        cfg["target_url"],
+        url,
         timeout=30,
         proxies=proxies,
         headers={"Referer": "https://in.bookmyshow.com/explore/movies-hyderabad"},
@@ -167,14 +231,14 @@ def is_available_bms_date(page_text, cfg):
 
     BMS only renders showtimes for the date currently being displayed, and it
     silently falls back to the nearest available date when you request a date
-    that hasn't opened yet. So the requested date (e.g. 20260720) sits at a
-    low ~3 count (just the date-strip navigation) until it opens, at which
-    point its showtimes render and it becomes the *dominant* date token.
+    that hasn't opened yet. So the requested date sits at a low ~3 count (just
+    the date-strip navigation) until it opens, at which point its showtimes
+    render and it becomes the *dominant* date token.
 
     Rule: open when the requested date is the most-referenced date token on
     the page and it clears a small floor (well above strip-only noise).
     """
-    requested = cfg["requested_date"]  # e.g. "20260720"
+    requested = cfg["requested_date"]
     floor = cfg.get("min_references", 10)
 
     tokens = re.findall(r"20\d{6}", page_text)
@@ -195,8 +259,7 @@ def is_available_venue_date(page_text, cfg):
     BMS renders a per-venue booking link like
         /cinemas/chennai/<slug>/buytickets/<venueCode>/<date>
     only when that venue has live shows for that exact date. Because the date
-    is baked into the link, it can't be confused with the silent fallback
-    (a fallback page carries /<code>/<fallbackDate>, not /<code>/<ourDate>).
+    is baked into the link, it can't be confused with the silent fallback.
 
     Set venue_code (one) or venue_codes (list). With a list, it's open when
     ANY of them is bookable for the date.
@@ -219,9 +282,6 @@ def is_available_generic(page_text, cfg):
     """
     Booking is considered OPEN for the target theatre when the theatre name
     is present AND at least one 'booking is live' signal is present.
-
-    Matching is case-insensitive and ignores extra whitespace so small
-    formatting differences don't cause misses.
     """
     haystack = re.sub(r"\s+", " ", page_text).lower()
 
@@ -229,19 +289,15 @@ def is_available_generic(page_text, cfg):
     if theatre not in haystack:
         return False
 
-    # If the movie name is configured, require it too (avoids false hits when
-    # the theatre is listed for other movies).
     movie = cfg.get("movie")
     if movie:
         if re.sub(r"\s+", " ", movie).lower().strip() not in haystack:
             return False
 
-    # Signals that booking is actually live rather than "coming soon".
     open_signals = cfg.get(
         "open_signals",
         ["book tickets", "book now", '"showtimes"', "showtime", "select seats"],
     )
-    # Signals that it's NOT yet open -- if present near-exclusively, treat as closed.
     closed_signals = cfg.get("closed_signals", ["notify me", "coming soon"])
 
     has_open = any(s.lower() in haystack for s in open_signals)
@@ -250,52 +306,119 @@ def is_available_generic(page_text, cfg):
     return has_open and not only_closed
 
 
-def main():
-    cfg = load_config()
-    state = load_json(STATE_PATH, default={"available": False}) or {"available": False}
+def pretty_date(d):
+    return f"{d[6:8]}-{d[4:6]}-{d[0:4]}"
 
-    target_desc = cfg.get("theatre") or cfg.get("requested_date", "target")
-    label = f"{cfg.get('movie', 'movie')} @ {target_desc}"
 
+def open_message(t):
+    if t.get("detector") in ("bms_date", "venue_date"):
+        venue = t.get("venue_label") or t.get("venue_code") or ""
+        venue_line = f"Theatre: {venue}\n" if venue else ""
+        return (
+            f"🎬 New shows added!\n\n"
+            f"{t.get('movie', 'Movie')}\n"
+            f"{venue_line}"
+            f"Date: {pretty_date(t['requested_date'])}\n\n"
+            f"Book here: {t['target_url']}"
+        )
+    return (
+        f"🎬 Booking is OPEN!\n\n"
+        f"{t.get('movie', 'Movie')}\n"
+        f"Theatre: {t['theatre']}\n\n"
+        f"Book here: {t['target_url']}"
+    )
+
+
+def find_sessions(page, t):
+    """Show ids found by the optional session_regex (group 1 if present)."""
+    rx = t.get("session_regex")
+    if not rx:
+        return None
+    return sorted({m.group(1) if m.groups() else m.group(0) for m in re.finditer(rx, page)})
+
+
+def check_shows(t, page, ts):
+    """Alert on newly added shows. Returns (sessions, changed)."""
+    sessions = find_sessions(page, t)
+    if sessions is None:
+        return None, False
+    known = ts.get("sessions")
+    changed = False
+    if known is not None:
+        new = [s for s in sessions if s not in known]
+        if new:
+            notify(
+                t,
+                f"🆕 {len(new)} new show(s) added\n\n"
+                f"{t['movie']} @ {t.get('venue_label', '')}\n"
+                f"Date: {pretty_date(t['requested_date'])}\n\n"
+                f"{t['target_url']}",
+            )
+    if sessions != known:
+        ts["sessions"] = sessions
+        changed = True
+    return sessions, changed
+
+
+def process_target(t, ts):
+    """Check one (movie, date). Mutates ts. Returns True if ts changed."""
+    label = f"{t.get('movie', 'movie')} {t.get('requested_date', '')} @ {t.get('theatre') or t.get('venue_label') or ''}".strip()
     try:
-        page = fetch(cfg)
+        page = fetch_url(t["target_url"], t)
     except requests.RequestException as exc:
         # Transient network/blocking errors shouldn't crash the workflow.
         print(f"[{label}] fetch failed: {exc}")
-        return 0
+        return False
 
-    available = is_available(page, cfg)
-    print(f"[{label}] available={available} (was {state.get('available')})")
+    available = is_available(page, t)
+    was = ts.get("available", False)
+    print(f"[{label}] available={available} (was {was})")
+    changed = False
 
-    if available and not state.get("available"):
-        if cfg.get("detector") in ("bms_date", "venue_date"):
-            rd = cfg["requested_date"]
-            pretty = f"{rd[6:8]}-{rd[4:6]}-{rd[0:4]}"
-            venue = cfg.get("venue_label") or cfg.get("venue_code") or ""
-            venue_line = f"Theatre: {venue}\n" if venue else ""
-            msg = (
-                f"🎬 Booking just OPENED!\n\n"
-                f"{cfg.get('movie', 'Movie')}\n"
-                f"{venue_line}"
-                f"Date: {pretty}\n\n"
-                f"Book here: {cfg['target_url']}"
-            )
-        else:
-            msg = (
-                f"🎬 Booking is OPEN!\n\n"
-                f"{cfg.get('movie', 'Movie')}\n"
-                f"Theatre: {cfg['theatre']}\n\n"
-                f"Book here: {cfg['target_url']}"
-            )
-        send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
+    if available and not was:
+        notify(t, open_message(t))
         print(f"[{label}] notification sent")
 
-    # Persist current state so we don't re-alert every run.
-    if available != state.get("available"):
-        state["available"] = available
-        state["checked_at"] = int(time.time())
-        save_json(STATE_PATH, state)
+    if available:
+        _, c1 = check_shows(t, page, ts)
+        changed |= c1
 
+    if available != was:
+        ts["available"] = available
+        ts["checked_at"] = int(time.time())
+        changed = True
+    return changed
+
+
+def load_state(targets):
+    raw = load_json(STATE_PATH, default={}) or {}
+    if "targets" in raw:
+        return raw
+    # Migrate the old flat {"available": bool} state onto the first target.
+    state = {"targets": {}}
+    if "available" in raw and targets:
+        state["targets"][targets[0]["key"]] = {
+            "available": raw["available"],
+            "checked_at": raw.get("checked_at"),
+        }
+    return state
+
+
+def main():
+    cfg = load_config()
+    targets = build_targets(cfg)
+    state = load_state(targets)
+    changed = False
+
+    for i, t in enumerate(targets):
+        if i:
+            time.sleep(cfg.get("delay_seconds", 2))
+        ts = state["targets"].setdefault(t["key"], {})
+        if process_target(t, ts):
+            changed = True
+
+    if changed or not STATE_PATH.exists():
+        save_json(STATE_PATH, state)
     return 0
 
 
