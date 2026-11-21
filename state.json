@@ -9,11 +9,17 @@
     "Avengers: Doomsday|20261216": {},
     "Avengers: Doomsday|20261217": {
       "available": true,
-      "checked_at": 1795237337
+      "checked_at": 1795237337,
+      "showtimes": [
+        "08:00 AM"
+      ]
     },
     "Avengers: Doomsday|20261218": {
       "available": true,
-      "checked_at": 1795237341
+      "checked_at": 1795237341,
+      "showtimes": [
+        "08:00 AM"
+      ]
     }
   }
 }
