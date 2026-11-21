@@ -1,7 +1,19 @@
 {
-  "available": false,
-  "checked_at": 1794775477,
-  "check_hour": 498558,
-  "checks_this_hour": 2,
-  "last_status_hour": 498558
+  "targets": {
+    "Dune: Part Three|20261216": {
+      "available": false,
+      "checked_at": 1794775477
+    },
+    "Dune: Part Three|20261217": {},
+    "Dune: Part Three|20261218": {},
+    "Avengers: Doomsday|20261216": {},
+    "Avengers: Doomsday|20261217": {
+      "available": true,
+      "checked_at": 1795237337
+    },
+    "Avengers: Doomsday|20261218": {
+      "available": true,
+      "checked_at": 1795237341
+    }
+  }
 }
