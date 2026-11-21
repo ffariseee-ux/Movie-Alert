@@ -306,19 +306,52 @@ def is_available_generic(page_text, cfg):
     return has_open and not only_closed
 
 
+TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\s?([AaPp][Mm])\b")
+
+
+def extract_showtimes(page, t):
+    """
+    Best-effort list of showtimes (e.g. "07:30 PM") for the configured venue.
+
+    Finds the venue's booking link (/<venueCode>/<date>) in the page, then reads
+    times from there up to the next *other* venue's link. If nothing is found
+    after the link, falls back to the text just before it.
+    """
+    codes = t.get("venue_codes") or [t["venue_code"]]
+    date = t["requested_date"]
+    found = {}
+    for code in codes:
+        marker = f"/{code}/{date}"
+        for start in [m.start() for m in re.finditer(re.escape(marker), page)][:1]:
+            nxt = re.search(rf"/buytickets/(?!{re.escape(code)}\b)\w+/{date}", page[start + len(marker):])
+            end = start + len(marker) + (nxt.start() if nxt else 8000)
+            end = min(end, start + 12000)
+            chunks = [page[start:end], page[max(0, start - 3000):start]]
+            for chunk in chunks:
+                times = TIME_RE.findall(chunk)
+                if times:
+                    for h, m, ap in times:
+                        h24 = int(h) % 12 + (12 if ap.lower() == "pm" else 0)
+                        found[(h24, int(m))] = f"{int(h):02d}:{m} {ap.upper()}"
+                    break
+    return [found[k] for k in sorted(found)]
+
+
 def pretty_date(d):
     return f"{d[6:8]}-{d[4:6]}-{d[0:4]}"
 
 
-def open_message(t):
+def open_message(t, showtimes=None):
     if t.get("detector") in ("bms_date", "venue_date"):
         venue = t.get("venue_label") or t.get("venue_code") or ""
         venue_line = f"Theatre: {venue}\n" if venue else ""
+        times_line = f"Showtimes: {', '.join(showtimes)}\n" if showtimes else ""
         return (
             f"🎬 New shows added!\n\n"
             f"{t.get('movie', 'Movie')}\n"
             f"{venue_line}"
-            f"Date: {pretty_date(t['requested_date'])}\n\n"
+            f"Date: {pretty_date(t['requested_date'])}\n"
+            f"{times_line}\n"
             f"Book here: {t['target_url']}"
         )
     return (
@@ -375,11 +408,31 @@ def process_target(t, ts):
     print(f"[{label}] available={available} (was {was})")
     changed = False
 
+    showtimes = extract_showtimes(page, t) if available else []
+
     if available and not was:
-        notify(t, open_message(t))
-        print(f"[{label}] notification sent")
+        notify(t, open_message(t, showtimes))
+        print(f"[{label}] notification sent (showtimes: {showtimes or 'none found'})")
+    elif available:
+        # Already open: alert only when extra showtimes appear.
+        old_times = ts.get("showtimes") or []
+        added = [s for s in showtimes if s not in old_times]
+        if old_times and added:
+            notify(
+                t,
+                f"🆕 More shows added!\n\n{t.get('movie', 'Movie')}\n"
+                f"{t.get('venue_label', '')}\n"
+                f"Date: {pretty_date(t['requested_date'])}\n"
+                f"New showtimes: {', '.join(added)}\n"
+                f"All showtimes: {', '.join(showtimes)}\n\n"
+                f"Book here: {t['target_url']}",
+            )
+            print(f"[{label}] new showtimes: {added}")
 
     if available:
+        if showtimes and showtimes != ts.get("showtimes"):
+            ts["showtimes"] = showtimes
+            changed = True
         _, c1 = check_shows(t, page, ts)
         changed |= c1
 
