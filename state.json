@@ -1,8 +1,12 @@
 {
   "targets": {
     "Dune: Part Three|20261216": {
-      "available": false,
-      "checked_at": 1794775477
+      "available": true,
+      "checked_at": 1795266954,
+      "showtimes": [
+        "05:45 PM",
+        "08:50 PM"
+      ]
     },
     "Dune: Part Three|20261217": {},
     "Dune: Part Three|20261218": {},
