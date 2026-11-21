@@ -2,8 +2,8 @@
   "detector": "venue_date",
   "venue_code": "PRHN",
   "venue_label": "Prasads Multiplex, Hyderabad",
-  "date_from": "20261217",
-  "date_to": "20261224",
+  "date_from": "20261216",
+  "date_to": "20261218",
   "delay_seconds": 2,
 
   "movies": [
