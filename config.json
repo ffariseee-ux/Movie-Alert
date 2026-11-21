@@ -1,9 +1,19 @@
 {
   "detector": "venue_date",
-  "movie": "Dune: Part Three",
-  "requested_date": "20261218",
   "venue_code": "PRHN",
   "venue_label": "Prasads Multiplex, Hyderabad",
-  "url_template":"https://in.bookmyshow.com/movies/hyderabad/dune-part-three/buytickets/ET00491771/{date}",
-  "min_references": 10
+  "date_from": "20261217",
+  "date_to": "20261224",
+  "delay_seconds": 2,
+
+  "movies": [
+    {
+      "name": "Dune: Part Three",
+      "url_template": "https://in.bookmyshow.com/movies/hyderabad/dune-part-three/buytickets/ET00491771/{date}"
+    },
+    {
+      "name": "Avengers: Doomsday",
+      "url_template": "https://in.bookmyshow.com/movies/hyderabad/avengers-doomsday/buytickets/ET00439706/{date}"
+    }
+  ]
 }
